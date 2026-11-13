@@ -72,7 +72,7 @@ try:
         run(command, cwd=release, env=env)
     session = str(state / 'session')  # Namespace only; the secret is never written here.
     base_env = {'HOME': str(home), 'PATH': f'{node.parent}:/usr/bin:/bin', 'MCP_TELEGRAM_MODE': 'messaging', 'TELEGRAM_SESSION_PATH': session, 'TELEGRAM_LOG_LEVEL': 'none'}
-    agent = {'Label': label, 'ProgramArguments': [str(node), str(release / 'dist/cli.js'), 'serve'], 'EnvironmentVariables': base_env, 'WorkingDirectory': str(release), 'RunAtLoad': True, 'KeepAlive': {'SuccessfulExit': False}, 'ThrottleInterval': 10, 'Umask': 0o077, 'StandardOutPath': str(state / 'daemon.log'), 'StandardErrorPath': str(state / 'daemon.log')}
+    agent = {'Label': label, 'ProgramArguments': [str(node), str(release / 'dist/cli.js'), 'serve'], 'EnvironmentVariables': base_env, 'WorkingDirectory': str(release), 'RunAtLoad': True, 'KeepAlive': True, 'ThrottleInterval': 10, 'Umask': 0o077, 'StandardOutPath': str(state / 'daemon.log'), 'StandardErrorPath': str(state / 'daemon.log')}
     plist.parent.mkdir(parents=True, exist_ok=True)
     with plist.open('xb') as output:
         plistlib.dump(agent, output)

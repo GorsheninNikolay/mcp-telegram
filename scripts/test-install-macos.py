@@ -2,6 +2,7 @@
 """Hermetic installer checks: fake build commands, real temporary files, no launchd."""
 import io
 import os
+import plistlib
 from pathlib import Path
 import runpy
 import subprocess
@@ -68,6 +69,7 @@ def case(failure=None):
             assert revision in telegram['args'][0]
             assert telegram['args'][1] == 'client'
             assert plist.exists()
+            assert plistlib.loads(plist.read_bytes())["KeepAlive"] is True
 for failure in [None, 'prepare', 'readback']:
     case(failure)
 print('PASS: installer preserves settings, limits approvals, and rolls back own config/plist on prepare/readback failure')
