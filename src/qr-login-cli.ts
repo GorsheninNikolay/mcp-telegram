@@ -26,14 +26,16 @@ async function main(): Promise<void> {
       );
       if (!result.success) throw new Error("Login failed; session was not accepted");
     }
-    await telegram.getMe();
+    const firstAccount = await telegram.getMe();
     await telegram.disconnect();
     // A successful login includes reloading the persisted session and verifying it.
     if (!(await telegram.loadSession()) || !(await telegram.connect()))
       throw new Error("Saved session could not be reloaded");
-    await telegram.getMe();
+    const reloadedAccount = await telegram.getMe();
+    if (firstAccount.id !== reloadedAccount.id) throw new Error("Reloaded session account does not match");
     console.clear();
     console.log("Login verified; session saved in Keychain and reloaded successfully.");
+    console.log(`Account: @${reloadedAccount.username ?? "unknown"} (id: ${reloadedAccount.id})`);
   } finally {
     await telegram.disconnect();
     releaseLock();
