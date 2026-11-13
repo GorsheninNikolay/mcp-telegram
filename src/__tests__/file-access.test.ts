@@ -10,18 +10,8 @@
  * a fixture there would be allowed for the wrong reason.
  */
 import assert from "node:assert/strict";
-import {
-  linkSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { checkReadablePath, FILE_DIRS_ENV, prepareWritablePath } from "../tools/file-access.js";
@@ -31,6 +21,7 @@ const REPO = join(fileURLToPath(import.meta.url), "..", "..", "..");
 let base = "";
 let home = "";
 let outside = "";
+let explicitRoots = "";
 const saved = {
   HOME: process.env.HOME,
   USERPROFILE: process.env.USERPROFILE,
@@ -69,7 +60,10 @@ before(() => {
   linkSync(join(home, "Documents", "tg.session"), join(home, "projects", "copy-of-session"));
   process.env.HOME = home;
   process.env.USERPROFILE = home;
-  delete process.env[FILE_DIRS_ENV];
+  explicitRoots = ["Documents", "projects", "Downloads", "Desktop", "AppData/Local/Temp"]
+    .map((dir) => join(home, dir))
+    .join(delimiter);
+  process.env[FILE_DIRS_ENV] = explicitRoots;
 });
 
 after(() => {
@@ -85,7 +79,7 @@ after(() => {
 const credentials = () => [join(home, ".mcp-telegram", "session"), join(home, "Documents", "tg.session")];
 
 describe("reading files to upload", () => {
-  it("allows ordinary files anywhere under home", async () => {
+  it("allows ordinary files under explicitly configured directories", async () => {
     assert.ok((await checkReadablePath(join(home, "Documents", "report.pdf"), credentials())).endsWith("report.pdf"));
     assert.ok((await checkReadablePath(join(home, "projects", "notes.txt"), credentials())).endsWith("notes.txt"));
   });
@@ -110,17 +104,9 @@ describe("reading files to upload", () => {
     await assert.rejects(checkReadablePath(join(home, "projects", "copy-of-session"), credentials()), /credentials/);
   });
 
-  it("refuses system files and folders outside the allowed roots", async (t) => {
+  it("refuses system files and folders outside the allowed roots", async () => {
     await assert.rejects(checkReadablePath("/etc/hostname", credentials()), /Refusing|not found/);
     // Temp folders are allowed roots: a checkout under /tmp would make `outside` allowed.
-    const temps = [tmpdir(), "/tmp"].map((p) => {
-      try {
-        return realpathSync(p);
-      } catch {
-        return p;
-      }
-    });
-    if (temps.some((t) => realpathSync(outside).startsWith(t))) return t.skip("repo checkout is inside a temp folder");
     await assert.rejects(checkReadablePath(join(outside, "data.csv"), credentials()), new RegExp(FILE_DIRS_ENV));
   });
 
@@ -130,7 +116,7 @@ describe("reading files to upload", () => {
       assert.ok(await checkReadablePath(join(outside, "data.csv"), credentials()));
       await assert.rejects(checkReadablePath(join(home, "Documents", "report.pdf"), credentials()));
     } finally {
-      delete process.env[FILE_DIRS_ENV];
+      process.env[FILE_DIRS_ENV] = explicitRoots;
     }
   });
 });
@@ -169,7 +155,7 @@ describe("writing downloads", () => {
     assert.equal(new Set(names).size, 3);
   });
 
-  it("a temp folder under AppData (Windows default) stays usable", async () => {
+  it("an explicitly configured AppData temp directory stays usable", async () => {
     // os.tmpdir() reads TMPDIR on POSIX and TEMP/TMP on Windows.
     const fakeTemp = join(home, "AppData", "Local", "Temp");
     const prev = { TEMP: process.env.TEMP, TMP: process.env.TMP };
@@ -190,7 +176,8 @@ describe("writing downloads", () => {
     }
   });
 
-  it("a default folder that is a symlink into a hidden folder is not an allowed root", async () => {
+  it("default exchange policy refuses Downloads symlinked into a hidden folder", async () => {
+    delete process.env[FILE_DIRS_ENV];
     const realDownloads = join(home, "Downloads");
     const parked = join(base, "parked-downloads");
     const { renameSync } = await import("node:fs");
@@ -200,6 +187,7 @@ describe("writing downloads", () => {
     try {
       await assert.rejects(prepareWritablePath(join(realDownloads, "payload.fish"), credentials()), /Refusing/);
     } finally {
+      process.env[FILE_DIRS_ENV] = explicitRoots;
       rmSync(realDownloads);
       renameSync(parked, realDownloads);
     }

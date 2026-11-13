@@ -6,6 +6,7 @@ import {
   type IpcMessage,
   type IpcToolRequest,
   type IpcToolResponse,
+  ipcIdentity,
   parseMessages,
 } from "../ipc-protocol.js";
 import { handleClient } from "../master.js";
@@ -37,6 +38,7 @@ async function roundtrip(
 ): Promise<IpcToolResponse[]> {
   return new Promise((resolve, reject) => {
     const client = connect(sockPath);
+    client.once("connect", () => client.write(encodeMessage({ type: "hello", id: "hello", identity: ipcIdentity() })));
     const responses: IpcToolResponse[] = [];
     let buf = "";
 
@@ -51,6 +53,7 @@ async function roundtrip(
       const { messages, remaining } = parseMessages(buf);
       buf = remaining;
       for (const msg of messages) {
+        if (msg.type === "hello") continue;
         if (msg.type === "tool_response") {
           responses.push(msg);
           if (responses.length === expectedCount) {
@@ -158,6 +161,9 @@ describe("handleClient / drainQueue", () => {
 
     const result = await new Promise<"timeout" | IpcMessage>((resolve) => {
       const client = connect(sockPath);
+      client.once("connect", () =>
+        client.write(encodeMessage({ type: "hello", id: "hello", identity: ipcIdentity() })),
+      );
       let buf = "";
 
       client.on("connect", () => {
@@ -170,6 +176,7 @@ describe("handleClient / drainQueue", () => {
         buf += chunk.toString("utf-8");
         const { messages } = parseMessages(buf);
         for (const msg of messages) {
+          if (msg.type === "hello") continue;
           client.destroy();
           resolve(msg);
         }
@@ -195,6 +202,7 @@ describe("handleClient / drainQueue", () => {
 
     await new Promise<void>((resolve, reject) => {
       const c = connect(sockPath);
+      c.once("connect", () => c.write(encodeMessage({ type: "hello", id: "hello", identity: ipcIdentity() })));
       c.on("connect", () => {
         c.write(encodeMessage(toolRequest("s1", "slow")));
         setTimeout(() => {
@@ -216,6 +224,9 @@ describe("handleClient / drainQueue", () => {
 
     const response = await new Promise<IpcToolResponse>((resolve, reject) => {
       const client = connect(sockPath);
+      client.once("connect", () =>
+        client.write(encodeMessage({ type: "hello", id: "hello", identity: ipcIdentity() })),
+      );
       let buf = "";
 
       client.on("connect", () => {

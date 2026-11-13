@@ -6,6 +6,7 @@ import { after, before, describe, it } from "node:test";
 import bigInt from "big-integer";
 import { Api } from "telegram/tl/index.js";
 import { TelegramService } from "../telegram-client.js";
+import { testSessionStore } from "./session-store.helper.js";
 
 /**
  * Regression tests for numeric-peer resolution. A bare numeric ID (as emitted
@@ -38,7 +39,7 @@ interface ServiceInternals {
 }
 
 function makeService(client: MockClient): ServiceInternals {
-  const svc = new TelegramService(1, "h", { sessionPath: SESSION_PATH });
+  const svc = new TelegramService(1, "h", { sessionPath: SESSION_PATH, sessionStore: testSessionStore(SESSION_PATH) });
   const s = svc as unknown as ServiceInternals;
   s.client = client;
   s.connected = true;

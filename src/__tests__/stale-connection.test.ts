@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { TelegramService } from "../telegram-client.js";
+import { testSessionStore } from "./session-store.helper.js";
 
 /**
  * Regression tests for issue #71 — "Master daemon never recovers from a dropped MTProto
@@ -52,7 +53,7 @@ type ServiceInternals = {
 };
 
 function makeService(): TelegramService {
-  return new TelegramService(1, "hash", { sessionPath: SESSION_PATH });
+  return new TelegramService(1, "hash", { sessionPath: SESSION_PATH, sessionStore: testSessionStore(SESSION_PATH) });
 }
 
 /** Reproduce the wedged state: our flag says connected, the transport underneath is `state`. */

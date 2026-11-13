@@ -8,6 +8,7 @@ import {
   type IpcMessage,
   type IpcToolRequest,
   type IpcToolResponse,
+  ipcIdentity,
   type McpServerInternal,
   parseMessages,
 } from "./ipc-protocol.js";
@@ -31,8 +32,8 @@ function cleanup() {
   cleanedUp = true;
   // Sync unlink only — process.exit handlers cannot await async server.close(),
   // and unlinking the socket file is sufficient to release the listening address.
-  releaseLock();
   releaseSocket();
+  releaseLock();
 }
 
 process.on("exit", cleanup);
@@ -87,6 +88,7 @@ export function handleClient(
 ) {
   const toolCallTimeoutMs = opts.toolCallTimeoutMs ?? TOOL_CALL_TIMEOUT_MS;
   let buf = "";
+  let verified = false;
   let processing = false;
   const queue: IpcMessage[] = [];
 
@@ -99,6 +101,19 @@ export function handleClient(
     while (queue.length > 0) {
       const msg = queue.shift();
       if (!msg) break;
+      if (msg.type === "hello") {
+        if (msg.identity !== ipcIdentity()) {
+          socket.destroy();
+          break;
+        }
+        verified = true;
+        send(socket, { type: "hello", id: msg.id, identity: ipcIdentity() });
+        continue;
+      }
+      if (!verified) {
+        socket.destroy();
+        break;
+      }
       if (msg.type === "tool") {
         await handleToolRequest(socket, msg, mcpServer, telegram, toolCallTimeoutMs);
       } else if (msg.type === "login_start") {
@@ -120,6 +135,10 @@ export function handleClient(
 
   socket.on("data", (chunk) => {
     buf += chunk.toString("utf-8");
+    if (buf.length > 1024 * 1024 || queue.length > 100) {
+      socket.destroy();
+      return;
+    }
     const { messages, remaining } = parseMessages(buf);
     buf = remaining;
     for (const msg of messages) queue.push(msg);
@@ -176,11 +195,20 @@ async function handleToolRequest(
         req.tool,
       );
     } catch (err) {
-      response.error = err instanceof Error ? err.message : String(err);
+      response.error = err instanceof Error ? err.message : "Tool failed";
+      if (req.tool === "telegram-send-message" || req.tool === "telegram-send-file") {
+        response.error =
+          "Send outcome is unknown; do not retry automatically. Read chat history before deciding whether to send again.";
+      }
       // A call that burns the whole budget is the signature of a dead MTProto transport that
       // our cached `connected` flag still reports as live. Flag it so the NEXT call
       // revalidates and reconnects, instead of every subsequent call hanging the same way.
-      if (err instanceof Error && err.message.startsWith("Tool call timed out")) {
+      if (
+        req.tool !== "telegram-send-message" &&
+        req.tool !== "telegram-send-file" &&
+        err instanceof Error &&
+        err.message.startsWith("Tool call timed out")
+      ) {
         console.error(`[mcp-telegram] ${err.message} — marking Telegram connection unhealthy`);
         telegram.markUnhealthy(`tool call timed out: ${req.tool}`);
       }
@@ -255,7 +283,7 @@ export async function startOwner(
   const srv = createServer((socket) => {
     console.error(`[${label}] client connected`);
     socket.on("close", () => console.error(`[${label}] client disconnected`));
-    handleClient(socket, mcpServer, telegram, { allowLogin: policy.mode === "full" });
+    handleClient(socket, mcpServer, telegram, { allowLogin: false });
   });
 
   await new Promise<void>((resolve, reject) => {

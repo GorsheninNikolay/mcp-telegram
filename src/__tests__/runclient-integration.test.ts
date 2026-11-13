@@ -70,6 +70,7 @@ describe("runClient integration", () => {
   it("exits with code 1 when master socket closes unexpectedly", async () => {
     // Fake master: accept one connection, then close it after 200ms
     fakeMaster = createServer((socket) => {
+      socket.on("data", (chunk) => socket.write(chunk));
       setTimeout(() => socket.destroy(), 200);
     });
     await new Promise<void>((resolve) => fakeMaster?.listen(sockFile, resolve));
@@ -98,7 +99,9 @@ describe("runClient integration", () => {
 
   it("exits with code 0 when stdin closes (parent gone)", async () => {
     // Fake master: keep connection open indefinitely
-    fakeMaster = createServer((_socket) => {});
+    fakeMaster = createServer((socket) => {
+      socket.on("data", (chunk) => socket.write(chunk));
+    });
     await new Promise<void>((resolve) => fakeMaster?.listen(sockFile, resolve));
 
     writeFileSync(lockFile, String(process.pid), { mode: 0o600 });

@@ -4,7 +4,7 @@ import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { encodeMessage, type IpcMessage, parseMessages } from "../ipc-protocol.js";
+import { encodeMessage, type IpcMessage, ipcIdentity, parseMessages } from "../ipc-protocol.js";
 import { socketPath } from "../lock.js";
 import { type OwnerHandle, startOwner } from "../master.js";
 import { runServe } from "../serve.js";
@@ -22,6 +22,7 @@ function sendAndCollect(
 ): Promise<{ messages: IpcMessage[]; client: ReturnType<typeof connect> }> {
   return new Promise((resolve, reject) => {
     const client = connect(sockPath);
+    client.once("connect", () => client.write(encodeMessage({ type: "hello", id: "hello", identity: ipcIdentity() })));
     const messages: IpcMessage[] = [];
     let buf = "";
     const timer = setTimeout(() => {
@@ -35,7 +36,7 @@ function sendAndCollect(
       buf += chunk.toString("utf-8");
       const parsed = parseMessages(buf);
       buf = parsed.remaining;
-      for (const m of parsed.messages) messages.push(m);
+      for (const m of parsed.messages) if (m.type !== "hello") messages.push(m);
       if (predicate(messages)) {
         clearTimeout(timer);
         resolve({ messages, client });
@@ -104,6 +105,7 @@ describe("serve owner-core (startOwner)", () => {
     const sock = socketPath();
     await new Promise<void>((resolve) => {
       const a = connect(sock);
+      a.once("connect", () => a.write(encodeMessage({ type: "hello", id: "hello", identity: ipcIdentity() })));
       a.on("connect", () => {
         a.write(encodeMessage({ type: "tool", id: "D1", tool: "telegram-status", args: {} }));
         setTimeout(() => {

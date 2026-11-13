@@ -1,110 +1,100 @@
 # Personal fork security policy
 
-Base: upstream `v1.45.1`, commit `0fde882`. This is a personal fork, not an official
-Telegram product or an independently certified client. It is not published to npm.
+This fork targets native macOS stdio/Unix IPC. It is private and is not published
+to npm. Install an exact reviewed Git commit with `npm ci --ignore-scripts` and
+the committed npm lockfile. Build native helpers with `npm run build:native`.
 
-## Default mode
+## Session and credentials
 
-`MCP_TELEGRAM_MODE=read-only` is the default. The owner and each client register
-only nine explicitly reviewed text/status/discovery tools. Authentication,
-account mutations, media downloads/uploads, translation, web previews and other
-tools are absent. A future upstream tool is denied until explicitly reviewed;
-`readOnlyHint` is not a security policy.
+The production SessionStore uses macOS Keychain through a small Security.framework
+Swift helper. API credentials and MTProto sessions travel on private stdin/stdout
+pipes, never argv. No plaintext SessionStore or legacy-session import is provided.
+Missing, locked, unavailable or denied Keychain does not enable file fallback.
+Save failure is fatal; login verifies the account before saving and verifies a
+fresh session reload before reporting success. 2FA is entered without echo in the
+local terminal. The daemon and Codex config require no secret environment variables.
 
-To restrict reading to specific chats, configure:
+The helper uses the user's login Keychain; OS prompts are confirmed locally by
+the user. This is encryption at rest, not isolation from malicious code running
+as the same OS user. The MTProto authorization grants Telegram account access;
+server policy, not Telegram, limits the available tools.
 
-```text
-MCP_TELEGRAM_MODE=read-only
-MCP_TELEGRAM_ALLOWED_CHAT_IDS=123456789,-1001234567890
-```
+## Tools and IPC
 
-These are example IDs, not real fixtures. Use exact numeric Telegram chat IDs.
-Aliases, usernames, names, empty lists and invalid modes are refused. With a
-scope, global chat listing/search are removed and every chat-specific handler
-checks the requested ID before accessing Telegram, then verifies the resolved
-peer against the canonical marked ID before returning chat data. Numeric IDs
-never fall back to matching chat titles. This applies to raw IPC as well as
-stdio. Missing scope means all account chats are readable through the small
-text-only tool set; an explicitly empty scope fails startup.
+The default remains `read-only`: nine reviewed text/status tools. Optional numeric
+chat scope is supported only in this mode. `messaging` adds exactly
+`telegram-send-message`, `telegram-send-file`, and `telegram-download-media`.
+Administrative tools, authentication over IPC, translation, web previews, inline
+profile downloads and new upstream tools are absent. Explicit `full` is retained
+for development and must not be used by the native installation.
 
-The daemon's policy is authoritative. A full-mode proxy cannot expand a
-read-only owner's registry. Conversely, connecting to an older or full-mode
-owner is not equivalent to starting a scoped read-only owner: all processes
-sharing a session must use this fork and the intended owner configuration.
-Stop the existing owner before changing its policy.
+The owner removes forbidden registry entries and validates every IPC tool argument
+with its Zod schema. The build fingerprint and canonical tool policy must match
+before any tool request. Old servers and mismatching policies fail closed. The
+native client entrypoint never promotes itself to session owner. One daemon or
+local login holds an OS flock through a pipe-owned native helper. The lock inode
+is never unlinked for stale recovery; the kernel releases it on owner death.
 
-## Intentional full mode
+After a send timeout/disconnection the result is unknown. No application-level
+new send is retried automatically. Read the destination history before deciding
+whether to send again. GramJS may retry the same RPC RequestState/randomId for
+transport recovery; this is not a new application send. Telegram-side deduplication
+and delivery are not established by local fake-client tests.
 
-`MCP_TELEGRAM_MODE=full` explicitly restores upstream tools and full account
-capabilities. It cannot be combined with a chat scope, because not every write
-tool has a single destination. Use client approvals in addition to server policy.
+## Files
 
-Local download/profile-photo tools are marked as writes, including variants
-that can return an inline image. File upload uses upstream realpath and credential
-checks; URL input to `telegram-send-file` is refused to avoid GramJS local fetches.
-Upstream v1.45.1 already blocks hidden/session files and avoids replacing existing
-downloads. This fork does not claim to have invented those fixes.
+Default upload directory: `~/TelegramMCP/Outbox`. Default download directory:
+`~/TelegramMCP/Inbox`. The messaging tools ignore file-root overrides. URL inputs,
+hidden paths, symlinks, multiple hardlinks and credential inodes are refused.
+Uploads use a bounded snapshot validated from an open descriptor, at most 50 MiB;
+GramJS receives the memory buffer rather than reopening the input path. Downloads
+are bounded and written through an exclusive descriptor without reopening or
+replacing the destination. Partial files may remain on a failed write.
 
-If full mode is necessary, set `MCP_TELEGRAM_FILE_DIRS` to a dedicated, otherwise
-empty exchange directory. Upstream defaults otherwise permit ordinary files
-under home/temp for upload and Downloads/Desktop/Documents/temp for download.
-Do not treat hidden-file filtering as protection for every possible credential.
+Another program with the same OS identity can swap parent directories or directly
+access Keychain and process memory. This native configuration does not claim to
+isolate that adversary. Dedicated exchange directories are not a general credential
+scanner; the user should put only intended outgoing files in Outbox.
 
-## IPC and authentication
+## Dependency audit
 
-IPC dispatch validates registered Zod input schemas, including defaults and
-transforms, and rejects disabled, unknown and inherited registry properties.
-Validation failures do not echo supplied values. Malformed tool envelopes are
-discarded. The read-only owner also rejects the separate IPC QR-login route.
+The production graph pins Hono 4.13.14 and @hono/node-server 2.1.5, the newest
+versions available in the configured registry during this change. The audit still
+flags Hono HTTP CSRF/form validation/mount/router handling, JSX escaping, body
+prototype pollution and CORS/Vary handling; node-server flags HTTP path parsing,
+static serving and WebSocket upgrade handling. Some duplicate advisories declare
+all versions vulnerable. No unreviewed downgrade or forced audit fix is applied.
 
-Authenticate explicitly through the local `login` CLI with the daemon stopped.
-QR links, API credentials, 2FA passwords and session strings must not be put in
-chat, captured tool output, screenshots, committed config or CI secrets.
-Do not retain `TELEGRAM_2FA_PASSWORD` in a long-running server's environment.
-No login or real Telegram operation is performed by the test suite.
+These findings are unreachable in the installed native profile: it has no HTTP
+listener, Hono app, form/body parser, JSX renderer, CORS middleware, HTTP router,
+static server or WebSocket upgrade handler. `transport-boundary.test.ts` rejects
+loading either HTTP package while importing the native owner/client/login modules
+and registering the actual messaging tools. Do not reuse this exception for an
+HTTP transport or hosted/container entrypoint. Re-audit before dependency changes.
 
-## Remaining trust boundary
+## Validation and installation
 
-The session is still a full-account MTProto authorization key, stored locally in
-plaintext with owner-only file permissions; this fork does not encrypt it.
-Read-only/chat scope is enforced by this application, not by Telegram. Malicious
-code in the process, a compromised dependency, or another process with the same
-OS identity can read the key or bypass these checks. The Unix socket is protected
-by filesystem permissions, not by isolation from the same OS user.
+Run lint, typecheck, all tests, native/TypeScript builds, docs build and CI. Tests
+use fake Telegram clients and synthetic files/stores; they never send real messages
+or authenticate a real account. Keychain integration tests use only disposable
+synthetic records and must clean them up. Fault injection tests cover denied storage and failed saves without fallback.
+`scripts/test-keychain.py` tests real locked read/save denial and unlock/reload
+against a separately created disposable Keychain, without locking the user's
+login Keychain. The helper permits system prompts only for local TTY login.
 
-Use a separate OS identity or a non-root container with only its private session
-volume and read-only configuration. Do not mount the home directory, SSH agent,
-Docker socket or unrelated files. Keep the root filesystem read-only where
-practical and use a newly created, separately revocable Telegram session. File
-permissions and tool allowlists do not replace this isolation.
+`scripts/install-macos.py --revision <SHA> --node <absolute-node-path>` refuses a
+dirty checkout, existing installation or existing `telegram` configuration. It
+installs that commit in a separate release directory, preserves other Codex
+settings and writes one LaunchAgent without starting it before login. Only the
+two send tools receive Codex `approval_mode = "approve"`; downloads retain the
+client write-approval policy. Administrator requirements may still override this.
 
-Message content remains untrusted data and may contain prompt injection. Even
-with no Telegram write tools, an assistant might leak read content through a
-different connector or shell command. Limit the chats and other tools available
-in the same agent task. Removing all account-key exposure requires an offline
-export workflow rather than a live personal-account connector.
+Run the generated `~/.local/share/telegram-mcp/login-local.sh` in your own local
+terminal. Do not paste QR tokens, API credentials, 2FA or sessions into chat. The
+script starts the daemon only after successful local login. Live acceptance still
+requires reload, two Codex sessions, daemon restart and the requested chat read.
+Real test sends require a separate explicit request.
 
-## Maintenance and validation
-
-Install from a reviewed commit with `npm ci --ignore-scripts`, then build from
-source. Keep `package-lock.json`; do not substitute a floating `npx ...@latest`.
-Review dependency updates separately. Upstream release/npm/registry/container/docs
-publishing workflows are disabled for this fork; CI remains enabled. `private`
-in package.json prevents accidental npm publication.
-
-Run `npm run lint`, `npm run typecheck`, `npm test`, `npm run build` and
-`npm run docs:build`. Security regressions cover the actual SDK registry and raw
-IPC dispatch with a fake Telegram service, plus upstream real-filesystem tests
-for credential paths, links and download collisions. No live-account acceptance
-is implied by these tests or by green CI.
-
-## Dependency audit boundary
-
-The initial production dependency audit reported three affected packages at
-moderate severity (`hono`, `@hono/node-server`, and their dependent MCP SDK).
-Available fixes in the advisory feed were not all available in the configured
-registry at review time. No forced SDK downgrade or broad `audit fix` was applied.
-The entrypoints in this fork use stdio and a local Unix socket/named pipe, not
-Hono HTTP serving; this is not a proof that every dependency advisory is irrelevant.
-Keep this finding open and recheck before enabling additional transports or
-upgrading dependencies. A green test run is not a clean vulnerability audit.
+On failed installation, disable only `mcp_servers.telegram` and stop only the new
+LaunchAgent. Retain its state and Keychain records for recovery. Removing local
+records does not revoke the session at Telegram; revocation is a separate action.

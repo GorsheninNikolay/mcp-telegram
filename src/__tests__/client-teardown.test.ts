@@ -7,6 +7,7 @@ import { TelegramClient } from "telegram";
 import { AuthKey } from "telegram/crypto/AuthKey.js";
 import { StringSession } from "telegram/sessions/index.js";
 import { TelegramService } from "../telegram-client.js";
+import { testSessionStore } from "./session-store.helper.js";
 
 /**
  * Every GramJS client this service stops using must be DESTROYED, not dropped.
@@ -50,7 +51,10 @@ async function makeSessionString(): Promise<string> {
 }
 
 function makeService(): TelegramService {
-  const service = new TelegramService(1, "hash", { sessionPath: SESSION_PATH });
+  const service = new TelegramService(1, "hash", {
+    sessionPath: SESSION_PATH,
+    sessionStore: testSessionStore(SESSION_PATH),
+  });
   service.setSessionString(validSession);
   return service;
 }

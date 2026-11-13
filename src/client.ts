@@ -6,6 +6,7 @@ import {
   encodeMessage,
   type IpcLoginDone,
   type IpcMessage,
+  ipcIdentity,
   type McpServerInternal,
   parseMessages,
 } from "./ipc-protocol.js";
@@ -73,28 +74,44 @@ export class IpcClient {
       }, this.connectTimeoutMs);
 
       const onConnect = () => {
-        clearTimeout(connectTimer);
         this.socket = s;
-        this.connected = true;
+        this.connected = false;
         s.removeListener("error", onError);
 
         s.on("data", (chunk) => {
           this.buf += chunk.toString("utf-8");
           const { messages, remaining } = parseMessages(this.buf);
           this.buf = remaining;
-          for (const msg of messages) this.routeMessage(msg);
+          for (const msg of messages) {
+            if (!this.connected) {
+              if (msg.type !== "hello" || msg.identity !== ipcIdentity()) {
+                s.destroy();
+                resolve(false);
+                return;
+              }
+              clearTimeout(connectTimer);
+              this.connected = true;
+              resolve(true);
+            } else this.routeMessage(msg);
+          }
         });
 
         s.on("close", () => {
           this.connected = false;
+          clearTimeout(connectTimer);
+          resolve(false);
           for (const [, p] of this.pending) {
             clearTimeout(p.timer);
-            p.reject(new Error("IPC connection closed"));
+            p.reject(
+              new Error("IPC connection closed; any pending send has unknown outcome, do not retry automatically"),
+            );
           }
           this.pending.clear();
           for (const [, l] of this.pendingLogins) {
             clearTimeout(l.timer);
-            l.reject(new Error("IPC connection closed"));
+            l.reject(
+              new Error("IPC connection closed; any pending send has unknown outcome, do not retry automatically"),
+            );
           }
           this.pendingLogins.clear();
           if (!this.destroyed) this.onDisconnect?.();
@@ -105,7 +122,7 @@ export class IpcClient {
         // Node requires an error listener on sockets — absence crashes the process.
         s.on("error", () => {});
 
-        resolve(true);
+        s.write(encodeMessage({ type: "hello", id: "handshake", identity: ipcIdentity() }));
       };
 
       const onError = () => {
@@ -157,7 +174,7 @@ export class IpcClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`IPC call timeout: ${tool}`));
+        reject(new Error(`IPC call timeout: ${tool}; send outcome may be unknown, do not retry automatically`));
       }, this.callTimeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       socket.write(encodeMessage({ type: "tool", id, tool, args }));

@@ -78,8 +78,10 @@ export function registerMessageTools(server: McpServer, telegram: TelegramServic
         const messageId = result?.id;
         const idInfo = messageId ? ` [#${messageId}]` : "";
         return ok(`Message sent to ${dest}${idInfo}`);
-      } catch (e) {
-        return fail(e);
+      } catch {
+        return fail(
+          new Error("Send outcome is unknown; do not retry automatically. Read chat history before sending again."),
+        );
       }
     },
   );

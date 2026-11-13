@@ -1,5 +1,4 @@
-import { existsSync } from "node:fs";
-import { chmod, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,8 +12,8 @@ import { computeCheck } from "telegram/Password.js";
 import { StringSession } from "telegram/sessions/index.js";
 import { Api } from "telegram/tl/index.js";
 import { getInputUser, getPeerId } from "telegram/Utils.js";
-import { secureSessionDir } from "./lock.js";
 import { FLOOD_WAIT_ERROR_PREFIX, RateLimiter } from "./rate-limiter.js";
+import { KeychainSessionStore, type SessionStore } from "./session-store.js";
 import type {
   AllStoriesSummary,
   BoostsListSummary,
@@ -231,16 +230,6 @@ function resolveSessionPath(sessionPath?: string): string {
   return sessionPath ?? process.env.TELEGRAM_SESSION_PATH ?? DEFAULT_SESSION_FILE;
 }
 
-// Cloud password (2FA) for accounts that have two-step verification enabled.
-// QR login alone cannot complete such logins — Telegram answers the imported
-// login token with SESSION_PASSWORD_NEEDED, after which an SRP password check
-// is required. Supplied via env so it works across all login entry points
-// (standalone CLI, daemon IPC, and the telegram-login MCP tool), none of which
-// can reliably prompt interactively mid-flow.
-function resolveTwoFactorPassword(): string | undefined {
-  return process.env.TELEGRAM_2FA_PASSWORD || undefined;
-}
-
 /** Minimal client surface the 2FA SRP step needs — lets us unit-test the
  *  branch logic with a stub instead of a live TelegramClient. */
 interface SrpClient {
@@ -269,7 +258,7 @@ export async function completeTwoFactorLogin(
   if (!password) {
     return {
       ok: false,
-      message: "2FA is enabled on this account. Set TELEGRAM_2FA_PASSWORD to your cloud password and run login again.",
+      message: "2FA is enabled on this account. Run the local login CLI and enter the password in the terminal.",
     };
   }
   try {
@@ -277,11 +266,10 @@ export async function completeTwoFactorLogin(
     const check = await compute(passwordInfo, password);
     await client.invoke(new Api.auth.CheckPassword({ password: check }));
     return { ok: true };
-  } catch (pwErr: unknown) {
-    const reason = pwErr instanceof Error ? pwErr.message : String(pwErr);
+  } catch {
     return {
       ok: false,
-      message: `2FA password check failed: ${reason}. Verify TELEGRAM_2FA_PASSWORD is correct.`,
+      message: "2FA password check failed. Verify the password in the local terminal.",
     };
   }
 }
@@ -342,10 +330,6 @@ function resolveBaseLogger(): Logger {
   return new Logger(level);
 }
 
-function ensureSessionDir(filePath: string): void {
-  secureSessionDir(dirname(filePath));
-}
-
 /** Media descriptor in message lists; `title`/`text` are Instant View page content, not the author's text. */
 export type MessageMediaInfo = { type: string; fileName?: string; size?: number } & InstantViewSummary;
 
@@ -393,6 +377,8 @@ export class TelegramService {
   private sessionString = "";
   private connected = false;
   private sessionPath: string;
+  private readonly sessionStore: SessionStore;
+  private readonly passwordPrompt?: () => Promise<string>;
   private rateLimiter = new RateLimiter();
   private lastTypingAt = new Map<string, number>();
   private entityCache = new Map<string, ChatEntity>();
@@ -415,7 +401,7 @@ export class TelegramService {
   }
 
   hasLocalSession(): boolean {
-    return existsSync(this.sessionPath);
+    return Boolean(this.sessionString);
   }
 
   // ─── Session & Auth ────────────────────────────────────────────────────────
@@ -424,45 +410,30 @@ export class TelegramService {
     return this.client;
   }
 
-  constructor(apiId: number, apiHash: string, options?: { sessionPath?: string }) {
+  constructor(
+    apiId: number,
+    apiHash: string,
+    options?: {
+      sessionPath?: string;
+      sessionStore?: SessionStore;
+      passwordPrompt?: () => Promise<string>;
+      interactiveKeychain?: boolean;
+    },
+  ) {
     this.apiId = apiId;
     this.apiHash = apiHash;
     this.sessionPath = resolveSessionPath(options?.sessionPath);
+    this.sessionStore =
+      options?.sessionStore ?? new KeychainSessionStore(this.sessionPath, options?.interactiveKeychain);
+    this.passwordPrompt = options?.passwordPrompt;
   }
 
   async loadSession(): Promise<boolean> {
-    // Try current session path
-    if (existsSync(this.sessionPath)) {
-      const raw = (await readFile(this.sessionPath, "utf-8")).trim();
-      if (this.isValidSessionString(raw)) {
-        this.sessionString = raw;
-        // Fix permissions on existing files
-        try {
-          await chmod(this.sessionPath, 0o600);
-        } catch {
-          // Best-effort hardening: the session is already loaded and usable, so a
-          // filesystem that refuses chmod (mounted volume, Windows) must not fail login.
-        }
-        return true;
-      }
-    }
-    // Migrate from legacy path (inside node_modules / package root)
-    if (this.sessionPath === DEFAULT_SESSION_FILE && existsSync(LEGACY_SESSION_FILE)) {
-      const raw = (await readFile(LEGACY_SESSION_FILE, "utf-8")).trim();
-      if (this.isValidSessionString(raw)) {
-        this.sessionString = raw;
-        ensureSessionDir(this.sessionPath);
-        await writeFile(this.sessionPath, raw, { encoding: "utf-8", mode: 0o600 });
-        try {
-          await unlink(LEGACY_SESSION_FILE);
-        } catch {
-          // Best-effort cleanup: migration to the new path already succeeded, so a
-          // leftover legacy file is cosmetic and must not fail the migration.
-        }
-        return true;
-      }
-    }
-    return false;
+    const raw = await this.sessionStore.load();
+    if (raw === null) return false;
+    if (!this.isValidSessionString(raw)) throw new Error("Invalid session in Keychain");
+    this.sessionString = raw;
+    return true;
   }
 
   private isValidSessionString(value: string): boolean {
@@ -480,13 +451,8 @@ export class TelegramService {
   }
 
   private async saveSession(session: string): Promise<void> {
+    await this.sessionStore.save(session);
     this.sessionString = session;
-    try {
-      ensureSessionDir(this.sessionPath);
-      await writeFile(this.sessionPath, session, { encoding: "utf-8", mode: 0o600 });
-    } catch {
-      // File write may fail in containerized environments — session string is still in memory
-    }
   }
 
   /**
@@ -609,9 +575,7 @@ export class TelegramService {
     // loop and auto-reconnect running with nobody left to stop it.
     await this.dropDeadClient();
     this.sessionString = "";
-    if (existsSync(this.sessionPath)) {
-      await unlink(this.sessionPath);
-    }
+    await this.sessionStore.delete();
   }
 
   /** Ensure connection is active, auto-reconnect if session exists */
@@ -641,13 +605,11 @@ export class TelegramService {
   async logOut(): Promise<boolean> {
     const wipeLocalOrThrow = async () => {
       await this.clearSession();
-      if (existsSync(this.sessionPath)) {
-        throw new Error(`Local session file still present after clearSession: ${this.sessionPath}`);
-      }
+      if (await this.sessionStore.load()) throw new Error("Keychain session still present after deletion");
     };
 
     if (!this.client || !this.connected) {
-      if (existsSync(this.sessionPath)) await wipeLocalOrThrow();
+      await wipeLocalOrThrow();
       return false;
     }
 
@@ -757,7 +719,10 @@ export class TelegramService {
             // The QR was scanned, but the account has two-step verification.
             // Complete the login with an SRP password check if we have the
             // cloud password; otherwise tell the user how to provide it.
-            const outcome = await completeTwoFactorLogin(client, resolveTwoFactorPassword());
+            const outcome = await completeTwoFactorLogin(
+              client,
+              this.passwordPrompt ? await this.passwordPrompt() : undefined,
+            );
             if (outcome.ok) {
               resolved = true;
               break;
@@ -802,9 +767,10 @@ export class TelegramService {
       }
 
       if (resolved) {
+        await client.getMe();
         const newSession = client.session.save() as unknown as string;
         // Persist FIRST, adopt SECOND — so if file write fails, in-memory state still
-        // matches whatever's on disk; saveSession is try/catch-safe for Docker etc.
+        // matches the persisted Keychain record; storage failures are fatal.
         await this.saveSession(newSession);
         // Destroy the previous in-memory client to free its auth_key / socket.
         // Previously left dangling → accumulated orphan Telegram connections per relogin.
@@ -854,7 +820,7 @@ export class TelegramService {
     if (!this.client || !this.connected) throw new Error(NOT_CONNECTED_ERROR);
     const client = this.client;
     // pi-lens-ignore: sql-injection
-    return this.rateLimiter.execute(async () => {
+    return (async () => {
       const resolved = await this.resolvePeer(chatId);
       // Raw path: high-level client.sendMessage does not support quoteText/effect.
       // Fall back to messages.SendMessage when either is requested.
@@ -903,7 +869,7 @@ export class TelegramService {
         ...topicReplyOptions(replyTo, topicId),
         ...(parseMode ? { parseMode: parseMode === "html" ? "html" : "md" } : {}),
       });
-    }, `sendMessage to ${chatId}`);
+    })();
   }
 
   /**
@@ -923,6 +889,23 @@ export class TelegramService {
    * attachment into a re-compressed photo — extension-less paths already went
    * out as documents, and this keeps that contract.
    */
+  async sendFileSnapshot(chatId: string, snapshot: { name: string; bytes: Buffer }, caption?: string): Promise<void> {
+    if (!this.client || !this.connected) throw new Error(NOT_CONNECTED_ERROR);
+    const resolved = await this.resolvePeer(chatId);
+    // Sending must not be retried by our rate limiter after an uncertain outcome.
+    const file = await this.client.uploadFile({
+      file: new CustomFile(snapshot.name, snapshot.bytes.length, "", snapshot.bytes),
+      workers: 1,
+      maxBufferSize: 50 * 1024 * 1024,
+    });
+    await this.client.sendFile(resolved, {
+      file,
+      attributes: [new Api.DocumentAttributeFilename({ fileName: snapshot.name })],
+      caption,
+      forceDocument: true,
+    });
+  }
+
   async sendFile(chatId: string, filePath: string, caption?: string, opts: { fileName?: string } = {}): Promise<void> {
     if (!this.client || !this.connected) throw new Error(NOT_CONNECTED_ERROR);
     const fileName = opts.fileName;

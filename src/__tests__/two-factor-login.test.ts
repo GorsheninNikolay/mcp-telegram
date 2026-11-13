@@ -32,7 +32,7 @@ describe("completeTwoFactorLogin", () => {
 
     assert.strictEqual(outcome.ok, false);
     assert.ok(!invoked, "must not contact Telegram when there is no password to check");
-    assert.match(outcome.ok === false ? outcome.message : "", /TELEGRAM_2FA_PASSWORD/);
+    assert.match(outcome.ok === false ? outcome.message : "", /local login CLI/);
   });
 
   it("treats an empty-string password as missing", async () => {
@@ -57,8 +57,8 @@ describe("completeTwoFactorLogin", () => {
     assert.strictEqual(outcome.ok, false);
     const msg = outcome.ok === false ? outcome.message : "";
     assert.match(msg, /2FA password check failed/);
-    assert.match(msg, /PASSWORD_HASH_INVALID/);
-    assert.match(msg, /Verify TELEGRAM_2FA_PASSWORD/);
+    assert.ok(!msg.includes("PASSWORD_HASH_INVALID"));
+    assert.match(msg, /Verify the password/);
     assert.ok(!msg.includes("wrong-password"), "must never echo the password back");
   });
 
@@ -76,7 +76,7 @@ describe("completeTwoFactorLogin", () => {
     const outcome = await completeTwoFactorLogin(client, "pw", throwingCompute);
 
     assert.strictEqual(outcome.ok, false);
-    assert.match(outcome.ok === false ? outcome.message : "", /2FA password check failed: Invalid password params/);
+    assert.match(outcome.ok === false ? outcome.message : "", /2FA password check failed/);
   });
 
   it("succeeds when GetPassword and CheckPassword both resolve", async () => {

@@ -1,7 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { TelegramService } from "../telegram-client.js";
-import { checkReadablePath, prepareWritablePath, releaseReservedPath } from "./file-access.js";
+import { prepareWritablePath, releaseReservedPath } from "./file-access.js";
+import { snapshotUpload, writeDownload } from "./safe-transfer.js";
 import { fail, ok, READ_ONLY, requireConnection, sanitize, WRITE } from "./shared.js";
 
 export function registerMediaTools(server: McpServer, telegram: TelegramService) {
@@ -25,11 +26,13 @@ export function registerMediaTools(server: McpServer, telegram: TelegramService)
       try {
         // GramJS can fetch URLs locally; accepting them would bypass filesystem policy
         // and introduce an unrelated network-fetch surface.
-        const source = await checkReadablePath(filePath, telegram.credentialFiles);
-        await telegram.sendFile(chatId, source, caption);
+        const source = await snapshotUpload(filePath, telegram.credentialFiles);
+        await telegram.sendFileSnapshot(chatId, source, caption);
         return ok(`File sent to ${chatId}`);
-      } catch (e) {
-        return fail(e);
+      } catch {
+        return fail(
+          new Error("Send outcome is unknown; do not retry automatically. Read chat history before sending again."),
+        );
       }
     },
   );
@@ -43,9 +46,7 @@ export function registerMediaTools(server: McpServer, telegram: TelegramService)
         messageId: z.number().describe("Message ID containing media"),
         downloadPath: z
           .string()
-          .describe(
-            "Absolute path to save the file, in Downloads, Desktop, Documents or a temp folder. An existing file is kept; a numbered name is used instead",
-          ),
+          .describe("Absolute path to save the file, in ~/TelegramMCP/Inbox. Existing files are never overwritten"),
       },
       annotations: WRITE,
     },
@@ -55,9 +56,9 @@ export function registerMediaTools(server: McpServer, telegram: TelegramService)
 
       let target: string | undefined;
       try {
-        target = await prepareWritablePath(downloadPath, telegram.credentialFiles);
-        const path = await telegram.downloadMedia(chatId, messageId, target);
-        return ok(`Media downloaded to ${path}`);
+        const media = await telegram.downloadMediaBounded(chatId, messageId, { maxBytes: 50 * 1024 * 1024 });
+        await writeDownload(downloadPath, media.buffer);
+        return ok(`Media downloaded to ${downloadPath}`);
       } catch (e) {
         if (target) await releaseReservedPath(target);
         return fail(e);

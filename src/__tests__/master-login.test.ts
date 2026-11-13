@@ -1,7 +1,7 @@
 import assert from "node:assert";
 import { connect, createServer, type Server } from "node:net";
 import { after, describe, it } from "node:test";
-import { encodeMessage, type IpcMessage, parseMessages } from "../ipc-protocol.js";
+import { encodeMessage, type IpcMessage, ipcIdentity, parseMessages } from "../ipc-protocol.js";
 import { handleClient } from "../master.js";
 import { cleanupIpcEndpoint, makeIpcEndpoint } from "./ipc-endpoint.helper.js";
 
@@ -39,6 +39,7 @@ async function collectMessages(
 ): Promise<IpcMessage[]> {
   return new Promise((resolve, reject) => {
     const client = connect(sockPath);
+    client.once("connect", () => client.write(encodeMessage({ type: "hello", id: "hello", identity: ipcIdentity() })));
     const messages: IpcMessage[] = [];
     let buf = "";
     const timer = setTimeout(() => {
@@ -53,7 +54,7 @@ async function collectMessages(
       buf += chunk.toString("utf-8");
       const parsed = parseMessages(buf);
       buf = parsed.remaining;
-      for (const m of parsed.messages) messages.push(m);
+      for (const m of parsed.messages) if (m.type !== "hello") messages.push(m);
       if (predicate(messages)) {
         clearTimeout(timer);
         client.destroy();
@@ -169,6 +170,7 @@ describe("master handleLoginStart", () => {
     // Open a client, start login, then close the socket before login completes.
     await new Promise<void>((resolve) => {
       const c = connect(sockPath);
+      c.once("connect", () => c.write(encodeMessage({ type: "hello", id: "hello", identity: ipcIdentity() })));
       c.on("connect", () => {
         c.write(encodeMessage({ type: "login_start", id: "L4" }));
         setTimeout(() => {
@@ -206,6 +208,7 @@ describe("master handleLoginStart", () => {
     // Client A: starts login, then closes socket → triggers abort.
     await new Promise<void>((resolve) => {
       const a = connect(sockPath);
+      a.once("connect", () => a.write(encodeMessage({ type: "hello", id: "hello", identity: ipcIdentity() })));
       a.on("connect", () => {
         a.write(encodeMessage({ type: "login_start", id: "LA" }));
         setTimeout(() => {
@@ -260,6 +263,7 @@ describe("master handleLoginStart", () => {
 
     // Client A: start QR login and keep the socket open (do NOT close it).
     const a = connect(sockPath);
+    a.once("connect", () => a.write(encodeMessage({ type: "hello", id: "hello", identity: ipcIdentity() })));
     await new Promise<void>((resolve) => {
       a.on("connect", () => {
         a.write(encodeMessage({ type: "login_start", id: "LA" }));

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { TelegramService } from "../telegram-client.js";
+import { testSessionStore } from "./session-store.helper.js";
 
 const TMP_DIR = join(tmpdir(), `mcp-telegram-logout-test-${process.pid}`);
 const SESSION_PATH = join(TMP_DIR, "session");
@@ -14,7 +15,7 @@ type MockClient = {
 };
 
 function makeService(): TelegramService {
-  return new TelegramService(1, "h", { sessionPath: SESSION_PATH });
+  return new TelegramService(1, "h", { sessionPath: SESSION_PATH, sessionStore: testSessionStore(SESSION_PATH) });
 }
 
 function primeConnected(service: TelegramService, client: MockClient): void {
@@ -40,9 +41,10 @@ describe("hasLocalSession()", () => {
     assert.strictEqual(service.hasLocalSession(), false);
   });
 
-  it("returns true when session file exists", () => {
+  it("returns true only for a loaded session", () => {
     writeFileSync(SESSION_PATH, "fake");
     const service = makeService();
+    service.setSessionString("test-session");
     assert.strictEqual(service.hasLocalSession(), true);
   });
 });
@@ -133,17 +135,11 @@ describe("logOut()", () => {
       invoke: async () => ({}),
       destroy: async () => {},
     });
-    // Simulate FS error on unlink by pointing sessionPath at a directory
-    // (unlink on a directory throws EISDIR / EPERM). Server revoke succeeds,
-    // but logOut() must throw so the tool returns fail() instead of falsely
-    // claiming local cleanup.
-    const s = service as unknown as { sessionPath: string };
-    const origPath = s.sessionPath;
-    s.sessionPath = TMP_DIR;
-
-    await assert.rejects(() => service.logOut());
-
-    s.sessionPath = origPath;
+    const failing = service as unknown as { sessionStore: { delete(): Promise<void> } };
+    failing.sessionStore.delete = async () => {
+      throw new Error("Keychain denied deletion");
+    };
+    await assert.rejects(() => service.logOut(), /Keychain denied deletion/);
   });
 
   it("returns true (revoked) even when client.destroy() throws", async () => {

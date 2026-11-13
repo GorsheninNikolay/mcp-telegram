@@ -33,3 +33,8 @@ coverage/
 
 # Output of `mcp-telegram-manifest` CLI
 manifest.json
+
+native/keychain-helper
+native/session-lock
+
+__pycache__/

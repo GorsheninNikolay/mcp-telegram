@@ -1,3 +1,23 @@
+import { BUILD_ID } from "./build-id.js";
+import { readToolPolicy } from "./tool-policy.js";
+import { inbox, outbox } from "./tools/safe-transfer.js";
+export function ipcIdentity(): string {
+  const policy = readToolPolicy();
+  return JSON.stringify([
+    BUILD_ID,
+    policy.mode,
+    [...(policy.chatIds ?? [])].sort(),
+    outbox(),
+    inbox(),
+    policy.mode === "full" ? (process.env.MCP_TELEGRAM_FILE_DIRS ?? null) : null,
+  ]);
+}
+export interface IpcHello {
+  type: "hello";
+  id: string;
+  identity: string;
+}
+
 /** MCP SDK internal tool registry — field name "handler" confirmed in SDK v1.29.0 */
 export type McpRegisteredTool = {
   handler: (args: Record<string, unknown>, extra: Record<string, unknown>) => Promise<unknown>;
@@ -51,7 +71,7 @@ export interface IpcLoginDone {
   error?: string;
 }
 
-export type IpcMessage = IpcToolRequest | IpcToolResponse | IpcLoginStart | IpcLoginQr | IpcLoginDone;
+export type IpcMessage = IpcHello | IpcToolRequest | IpcToolResponse | IpcLoginStart | IpcLoginQr | IpcLoginDone;
 
 /** Encode a message as newline-delimited JSON */
 export function encodeMessage(msg: IpcMessage): string {
@@ -79,6 +99,7 @@ export function parseMessages(buf: string): { messages: IpcMessage[]; remaining:
 function isIpcMessage(m: Partial<IpcMessage>): m is IpcMessage {
   if (!m || typeof m !== "object" || Array.isArray(m) || typeof m.type !== "string" || typeof m.id !== "string")
     return false;
+  if (m.type === "hello") return typeof m.identity === "string";
   if (m.type === "tool") {
     return (
       typeof m.tool === "string" &&

@@ -11,6 +11,10 @@ class FakeSocket extends EventEmitter {
   destroyed = false;
 
   write(data: string) {
+    if (JSON.parse(data).type === "hello") {
+      setImmediate(() => this.emit("data", Buffer.from(data)));
+      return true;
+    }
     this.written.push(data);
     return true;
   }

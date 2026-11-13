@@ -20,14 +20,9 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         node-version: [22, 24]
-        # Issue #69: the npm package could not start AT ALL on Windows. The
-        # IPC endpoint was a filesystem path, which net.listen() rejects there
-        # with EACCES; a Linux-only matrix could never see it. One Windows job
-        # guards the platform split
-        # in socketPath() without tripling CI time.
         include:
-          - os: windows-latest
-            node-version: 22
+          - os: macos-latest
+            node-version: 24
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # v7.0.0
@@ -35,7 +30,14 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts
+      - run: npm run build:lock
+      - run: npm run build:native
+        if: runner.os == 'macOS'
+      - run: python3 scripts/test-install-macos.py
+        if: runner.os == 'macOS'
+      - run: python3 scripts/test-keychain.py
+        if: runner.os == 'macOS'
       - run: npx biome check src/
       - run: npx tsc --noEmit
       - run: npm run build

@@ -16,6 +16,7 @@ import {
   topicReplyOptions,
 } from "../telegram-helpers.js";
 import { isSafeAbsolutePath } from "../tools/shared.js";
+import { testSessionStore } from "./session-store.helper.js";
 
 const TMP_DIR = join(tmpdir(), `mcp-telegram-sendmedia-test-${process.pid}`);
 const SESSION_PATH = join(TMP_DIR, "session");
@@ -34,7 +35,7 @@ type MockClient = {
 };
 
 function makeService(): TelegramService {
-  return new TelegramService(1, "h", { sessionPath: SESSION_PATH });
+  return new TelegramService(1, "h", { sessionPath: SESSION_PATH, sessionStore: testSessionStore(SESSION_PATH) });
 }
 
 function primeConnected(service: TelegramService, client: MockClient): void {

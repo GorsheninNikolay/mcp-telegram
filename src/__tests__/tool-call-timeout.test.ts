@@ -1,7 +1,13 @@
 import assert from "node:assert";
 import { connect, createServer, type Server } from "node:net";
 import { after, before, describe, it } from "node:test";
-import { encodeMessage, type IpcToolRequest, type IpcToolResponse, parseMessages } from "../ipc-protocol.js";
+import {
+  encodeMessage,
+  type IpcToolRequest,
+  type IpcToolResponse,
+  ipcIdentity,
+  parseMessages,
+} from "../ipc-protocol.js";
 import { handleClient } from "../master.js";
 import { cleanupIpcEndpoint, makeIpcEndpoint } from "./ipc-endpoint.helper.js";
 
@@ -68,6 +74,7 @@ after(async () => {
 function roundtrip(requests: IpcToolRequest[], expected: number, budgetMs = 5000): Promise<IpcToolResponse[]> {
   return new Promise((resolve, reject) => {
     const client = connect(SOCK);
+    client.once("connect", () => client.write(encodeMessage({ type: "hello", id: "hello", identity: ipcIdentity() })));
     const responses: IpcToolResponse[] = [];
     let buf = "";
 

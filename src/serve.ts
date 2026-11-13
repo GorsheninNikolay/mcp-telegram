@@ -10,7 +10,7 @@ import { TelegramService } from "./telegram-client.js";
 export async function runServe(apiId: number, apiHash: string, version: string): Promise<void> {
   // The daemon must be the sole connection owner. If another owner already holds the lock,
   // refuse rather than open a second client on the same session (AUTH_KEY_DUPLICATED).
-  if (!tryAcquireLock()) {
+  if (!(await tryAcquireLock())) {
     console.error("[serve] Another owner already holds the lock; refusing to start a second daemon.");
     process.exit(1);
   }

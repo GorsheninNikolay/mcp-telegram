@@ -25,14 +25,14 @@ const SCOPED_TOOLS = new Set([
 ]);
 
 export interface ToolPolicy {
-  mode: "read-only" | "full";
+  mode: "read-only" | "messaging" | "full";
   chatIds?: ReadonlySet<string>;
 }
 
 export function readToolPolicy(env: NodeJS.ProcessEnv = process.env): ToolPolicy {
   const mode = env.MCP_TELEGRAM_MODE ?? "read-only";
-  if (mode !== "read-only" && mode !== "full") {
-    throw new Error("MCP_TELEGRAM_MODE must be read-only or full");
+  if (mode !== "read-only" && mode !== "messaging" && mode !== "full") {
+    throw new Error("MCP_TELEGRAM_MODE must be read-only, messaging or full");
   }
   const raw = env.MCP_TELEGRAM_ALLOWED_CHAT_IDS;
   if (raw === undefined) return { mode };
@@ -52,7 +52,12 @@ export function applyToolPolicy(
 ): void {
   if (policy.mode === "full") return;
   const registry = (server as unknown as McpServerInternal)._registeredTools;
-  const allowed = policy.chatIds ? SCOPED_TOOLS : TEXT_READ_TOOLS;
+  const allowed =
+    policy.mode === "messaging"
+      ? new Set([...TEXT_READ_TOOLS, "telegram-send-message", "telegram-send-file", "telegram-download-media"])
+      : policy.chatIds
+        ? SCOPED_TOOLS
+        : TEXT_READ_TOOLS;
   for (const [name, tool] of Object.entries(registry)) {
     if (!allowed.has(name)) {
       // Use the SDK lifecycle to remove the tool from both discovery and dispatch.

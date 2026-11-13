@@ -3,7 +3,7 @@
   "version": "1.45.1",
   "private": true,
   "mcpName": "io.github.mcp-telegram/mcp-telegram",
-  "description": "MCP server for Telegram userbot — messages, media, reactions, polls & more. Built on GramJS/MTProto.",
+  "description": "MCP server for Telegram userbot \u2014 messages, media, reactions, polls & more. Built on GramJS/MTProto.",
   "type": "module",
   "main": "dist/index.js",
   "exports": {
@@ -26,7 +26,7 @@
     "start": "node dist/index.js",
     "login": "node dist/qr-login-cli.js",
     "clean": "node --eval \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-    "prebuild": "npm run clean",
+    "prebuild": "npm run clean && node scripts/build-id.mjs",
     "build": "tsc && node --eval \"for (const f of ['dist/cli.js','dist/manifest.js','dist/qr-login-cli.js']) require('node:fs').chmodSync(f, 0o755)\"",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build",
@@ -41,7 +41,9 @@
     "docs:dev": "vitepress dev docs",
     "predocs:build": "npm run gen:changelog",
     "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:preview": "vitepress preview docs",
+    "build:native": "npm run build:lock && swiftc -module-cache-path /private/tmp/telegram-mcp-swift-cache -O -framework Security native/keychain.swift -o native/keychain-helper",
+    "build:lock": "cc -O2 -Wall -Wextra -Werror native/session-lock.c -o native/session-lock"
   },
   "keywords": [
     "mcp",

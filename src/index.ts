@@ -6,46 +6,41 @@ console.log = (...args: unknown[]) => {
   console.error(...args);
 };
 
-import "dotenv/config";
 import { createRequire } from "node:module";
 import { tryAcquireLock } from "./lock.js";
+import { loadApiCredentials } from "./session-store.js";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json") as { version: string };
 
-// Telegram API credentials from env
-const API_ID = Number(process.env.TELEGRAM_API_ID);
-const API_HASH = process.env.TELEGRAM_API_HASH;
-
-// Credentials are required only on the OWNER paths (serve/master) that open the real
-// Telegram connection. A client proxies every call over IPC and never connects, so it
-// runs without them — letting credentials stay only where the daemon runs.
-function requireCreds(): void {
-  if (!API_ID || !API_HASH) {
-    console.error(
-      "[mcp-telegram] Missing TELEGRAM_API_ID and TELEGRAM_API_HASH (required to own the Telegram connection)",
-    );
-    console.error("Get your credentials at https://my.telegram.org/apps (API development tools)");
-    console.error("Set them in .env or export as environment variables");
-    process.exit(1);
-  }
+let API_ID = 0;
+let API_HASH = "";
+async function requireCreds(): Promise<void> {
+  const credentials = await loadApiCredentials();
+  API_ID = credentials.apiId;
+  API_HASH = credentials.apiHash;
 }
 
 async function main() {
   // Persistent daemon mode: `mcp-telegram serve` (or MCP_TELEGRAM_DAEMON=1). The daemon owns
   // the connection with no stdio attached; every other process becomes a client.
   if (process.argv[2] === "serve" || process.env.MCP_TELEGRAM_DAEMON === "1") {
-    requireCreds();
+    await requireCreds();
     console.error("[mcp-telegram] Starting in serve (daemon) mode");
     const { runServe } = await import("./serve.js");
     await runServe(API_ID, API_HASH as string, version);
     return;
   }
 
-  const isMaster = tryAcquireLock();
+  if (process.argv[2] === "client") {
+    const { runClient } = await import("./client.js");
+    await runClient(0, "", version);
+    return;
+  }
+  const isMaster = await tryAcquireLock();
 
   if (isMaster) {
-    requireCreds();
+    await requireCreds();
     console.error("[mcp-telegram] Starting as master process");
     const { runMaster } = await import("./master.js");
     await runMaster(API_ID, API_HASH as string, version);
@@ -59,6 +54,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("[mcp-telegram] Fatal:", err);
+  console.error("[mcp-telegram] Startup failed:", err instanceof Error ? err.message : "unknown error");
   process.exit(1);
 });

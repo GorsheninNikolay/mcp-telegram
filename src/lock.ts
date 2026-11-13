@@ -1,7 +1,9 @@
+import { type ChildProcess, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const DEFAULT_SESSION_DIR = join(homedir(), ".mcp-telegram");
 
@@ -22,6 +24,7 @@ export function secureSessionDir(dir: string, dedicatedDir = DEFAULT_SESSION_DIR
   // Create-or-keep in one call, then always check: no window between "missing" and
   // "created" in which another process could plant a wider folder.
   mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (lstatSync(dir).isSymbolicLink()) throw new Error("State directory must not be a symlink");
   if (process.platform === "win32") return;
   let mode: number;
   try {
@@ -79,86 +82,62 @@ export function socketPath(): string {
  *
  * Uses PID file + kill -0 to detect stale locks after crashes.
  */
-export function tryAcquireLock(): boolean {
-  const lock = lockPath();
-  const dir = dirname(lock);
-
-  secureSessionDir(dir);
-
-  if (existsSync(lock)) {
-    try {
-      const pid = Number.parseInt(readFileSync(lock, "utf-8").trim(), 10);
-      if (!Number.isNaN(pid) && pid > 0) {
-        try {
-          // kill -0: check if process is alive without sending a signal
-          process.kill(pid, 0);
-          // Process is alive — another master owns the lock
-          return false;
-        } catch (err) {
-          // ESRCH: process not found — stale lock, take over.
-          // EPERM: process is alive but owned by another uid we can't signal —
-          // treat as a live owner and DON'T steal the lock.
-          if ((err as NodeJS.ErrnoException).code === "EPERM") return false;
-          unlinkSync(lock);
-        }
-      }
-    } catch {
-      // Unreadable lock — remove and take over
+let lockHolder: ChildProcess | null = null;
+export async function tryAcquireLock(): Promise<boolean> {
+  if (lockHolder) return false;
+  secureSessionDir(dirname(lockPath()));
+  // Refuse a still-running legacy owner, which does not participate in flock.
+  if (existsSync(lockPath())) {
+    const pid = Number(readFileSync(lockPath(), "utf8").trim());
+    if (Number.isSafeInteger(pid) && pid > 0) {
       try {
-        unlinkSync(lock);
-      } catch {}
+        process.kill(pid, 0);
+        return false;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") return false;
+      }
     }
   }
-
-  try {
-    // O_EXCL flag: atomic exclusive create — prevents TOCTOU race between two simultaneous starts
-    writeFileSync(lock, String(process.pid), { flag: "wx", mode: 0o600 });
-    return true;
-  } catch {
-    // EEXIST: another process just created the lock — we lost the race, become client
-    return false;
-  }
+  const child = spawn(
+    fileURLToPath(new URL("../native/session-lock", import.meta.url)),
+    [join(dirname(lockPath()), "owner.flock")],
+    { stdio: ["pipe", "pipe", "ignore"] },
+  );
+  return new Promise((resolve) => {
+    let acquired = false;
+    child.on("error", () => resolve(false));
+    child.once("exit", () => {
+      if (lockHolder === child) {
+        lockHolder = null;
+        // Losing the OS lock must never leave a Telegram owner running.
+        process.exit(1);
+      }
+      if (!acquired) resolve(false);
+    });
+    child.stdout?.once("data", (data) => {
+      if (data.toString() !== "locked\n") {
+        child.kill();
+        resolve(false);
+        return;
+      }
+      acquired = true;
+      lockHolder = child;
+      resolve(true);
+    });
+  });
 }
 
 export function releaseLock(): void {
-  try {
-    const lock = lockPath();
-    if (existsSync(lock)) {
-      const pid = Number.parseInt(readFileSync(lock, "utf-8").trim(), 10);
-      // Only remove our own lock
-      if (pid === process.pid) unlinkSync(lock);
-    }
-  } catch {}
+  const child = lockHolder;
+  lockHolder = null;
+  child?.stdin?.end();
 }
 
 export function releaseSocket(): void {
+  if (!lockHolder) return;
   try {
-    const sock = socketPath();
-    if (!existsSync(sock)) return;
-    // Ownership guard (mirrors releaseLock): never unlink a socket owned by a different,
-    // still-alive process. Otherwise any process that imports this module and exits (e.g. a
-    // one-shot run or a test on the same host) would delete a running daemon's socket file,
-    // leaving the daemon listening in memory but unreachable for new clients.
-    const lock = lockPath();
-    if (existsSync(lock)) {
-      const pid = Number.parseInt(readFileSync(lock, "utf-8").trim(), 10);
-      // Ignore non-positive PIDs (e.g. 0) so kill() can't probe our own process group.
-      if (!Number.isNaN(pid) && pid > 0 && pid !== process.pid) {
-        try {
-          process.kill(pid, 0); // foreign owner still alive?
-          return; // yes — leave its socket alone
-        } catch (err) {
-          // ESRCH: stale owner — safe to remove. EPERM: owner is alive under a
-          // different uid (e.g. a systemd daemon) — leave its socket alone too.
-          if ((err as NodeJS.ErrnoException).code === "EPERM") return;
-        }
-      }
-    }
-    unlinkSync(sock);
-  } catch {
-    // Best-effort cleanup, called from a process.on("exit") handler where throwing would
-    // turn an orderly shutdown into a crash. A leftover socket file is recoverable: the
-    // next master calls releaseSocket() again before listening. On win32 socketPath() is a
-    // named pipe, existsSync() is false and we return before ever reaching unlinkSync.
+    unlinkSync(socketPath());
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }

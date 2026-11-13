@@ -6,16 +6,18 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import bigInt from "big-integer";
 import { Api } from "telegram/tl/index.js";
 import { z } from "zod";
-import { type McpServerInternal, parseMessages } from "../ipc-protocol.js";
+import { ipcIdentity, type McpServerInternal, parseMessages } from "../ipc-protocol.js";
 import { handleClient } from "../master.js";
 import { TelegramService } from "../telegram-client.js";
 import { applyToolPolicy, readToolPolicy } from "../tool-policy.js";
 import { registerTools } from "../tools/index.js";
+import { testSessionStore } from "./session-store.helper.js";
 
 class SocketStub extends EventEmitter {
   destroyed = false;
   responses: Array<Record<string, unknown>> = [];
   write(line: string) {
+    if (JSON.parse(line).type === "hello") return true;
     this.responses.push(JSON.parse(line));
     this.emit("response");
     return true;
@@ -25,6 +27,7 @@ class SocketStub extends EventEmitter {
 async function call(server: McpServer, telegram: TelegramService, request: object) {
   const socket = new SocketStub();
   handleClient(socket as unknown as Socket, server as unknown as McpServerInternal, telegram);
+  socket.emit("data", Buffer.from(`${JSON.stringify({ type: "hello", id: "hello", identity: ipcIdentity() })}\n`));
   const response = new Promise<Record<string, unknown>>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("No IPC response")), 1000);
     socket.once("response", () => {
@@ -148,7 +151,10 @@ describe("fork security policy", () => {
 
   it("rejects numeric title and canonical peer substitution through the actual owner registry", async () => {
     for (const direct of [false, true]) {
-      const telegram = new TelegramService(1, "test", { sessionPath: "/nonexistent/security-test-session" });
+      const telegram = new TelegramService(1, "test", {
+        sessionPath: "/nonexistent/security-test-session",
+        sessionStore: testSessionStore("/nonexistent/security-test-session"),
+      });
       const other = new Api.User({ id: bigInt(999), firstName: "Not allowed" });
       Object.assign(telegram, {
         ensureConnected: async () => true,
