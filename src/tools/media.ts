@@ -13,9 +13,7 @@ export function registerMediaTools(server: McpServer, telegram: TelegramService)
         chatId: z.string().describe("Chat ID or username"),
         filePath: z
           .string()
-          .describe(
-            "Absolute path to a file under the home or temp folder (hidden folders are refused), or an http(s) URL",
-          ),
+          .describe("Absolute path to a local file in an allowed folder. URLs and hidden folders are refused"),
         caption: z.string().optional().describe("File caption"),
       },
       annotations: WRITE,
@@ -25,10 +23,9 @@ export function registerMediaTools(server: McpServer, telegram: TelegramService)
       if (err) return fail(new Error(err));
 
       try {
-        // http(s) URLs are fetched by Telegram's servers, not read locally.
-        const source = /^https?:\/\//i.test(filePath)
-          ? filePath
-          : await checkReadablePath(filePath, telegram.credentialFiles);
+        // GramJS can fetch URLs locally; accepting them would bypass filesystem policy
+        // and introduce an unrelated network-fetch surface.
+        const source = await checkReadablePath(filePath, telegram.credentialFiles);
         await telegram.sendFile(chatId, source, caption);
         return ok(`File sent to ${chatId}`);
       } catch (e) {
@@ -50,7 +47,7 @@ export function registerMediaTools(server: McpServer, telegram: TelegramService)
             "Absolute path to save the file, in Downloads, Desktop, Documents or a temp folder. An existing file is kept; a numbered name is used instead",
           ),
       },
-      annotations: READ_ONLY,
+      annotations: WRITE,
     },
     async ({ chatId, messageId, downloadPath }) => {
       const err = await requireConnection(telegram);
@@ -86,7 +83,7 @@ export function registerMediaTools(server: McpServer, telegram: TelegramService)
           .optional()
           .describe("Photo size: 'small' (160x160) or 'big' (640x640). Default: big"),
       },
-      annotations: READ_ONLY,
+      annotations: WRITE,
     },
     async ({ entityId, savePath, size }) => {
       const err = await requireConnection(telegram);

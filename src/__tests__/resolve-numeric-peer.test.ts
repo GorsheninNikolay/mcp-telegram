@@ -34,6 +34,7 @@ interface ServiceInternals {
   entityCache: Map<string, unknown>;
   resolveNumericPeer(chatId: string): Promise<unknown>;
   resolveChat(chatId: string): Promise<unknown>;
+  requireExactChatId(chatId: string): Promise<void>;
 }
 
 function makeService(client: MockClient): ServiceInternals {
@@ -233,15 +234,14 @@ describe("resolveChat numeric IDs", () => {
     assert.strictEqual(out, chatEntity);
   });
 
-  it("falls back to a numeric title match when no entity id matches", async () => {
+  it("refuses a numeric title match when no entity id matches", async () => {
     const chatEntity = makeChat(77);
     const s = makeService({
       getEntity: DIRECT_RESOLVE_FAILS,
       getDialogs: async () => [{ entity: chatEntity, title: "2024" }],
     });
 
-    const out = await s.resolveChat("2024");
-    assert.strictEqual(out, chatEntity);
+    await assert.rejects(s.resolveChat("2024"), /Cannot find chat/);
   });
 
   it("fetches dialogs only once per lookup", async () => {
@@ -256,5 +256,22 @@ describe("resolveChat numeric IDs", () => {
 
     await assert.rejects(s.resolveChat("999"), /Cannot find chat "999"/);
     assert.strictEqual(calls, 1);
+  });
+});
+
+describe("canonical scoped chat identity", () => {
+  it("refuses a partial numeric title and a group with a colliding bare ID", async () => {
+    const s = makeService({
+      getEntity: DIRECT_RESOLVE_FAILS,
+      getDialogs: async () => [{ entity: makeChat(77), title: "chat123" }],
+    });
+    await assert.rejects(s.requireExactChatId("123"), /Cannot find chat/);
+    await assert.rejects(s.requireExactChatId("77"), /canonical chat ID/);
+    await assert.doesNotReject(s.requireExactChatId("-77"));
+  });
+  it("refuses a mismatched entity even when getEntity resolves directly", async () => {
+    const s = makeService({ getEntity: async () => makeChannel(123), getDialogs: mustNotBeCalled });
+    await assert.rejects(s.requireExactChatId("123"), /canonical chat ID/);
+    await assert.doesNotReject(s.requireExactChatId("-100123"));
   });
 });

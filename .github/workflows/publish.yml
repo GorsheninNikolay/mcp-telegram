@@ -14,6 +14,7 @@ on:
 
 jobs:
   publish-npm:
+    if: github.repository == 'mcp-telegram/mcp-telegram'
     # Release tags only (environment policy + tag ruleset): a branch dispatch
     # by anyone with write access cannot publish.
     environment: release
@@ -67,6 +68,7 @@ jobs:
           exit 1
 
   publish-mcp-registry:
+    if: github.repository == 'mcp-telegram/mcp-telegram'
     # Release tags only (environment policy + tag ruleset): a branch dispatch
     # by anyone with write access cannot publish.
     environment: release
@@ -229,6 +231,7 @@ jobs:
           exit 1
 
   publish-docker:
+    if: github.repository == 'mcp-telegram/mcp-telegram'
     # Release tags only (environment policy + tag ruleset): a branch dispatch
     # by anyone with write access cannot publish.
     environment: release
@@ -262,6 +265,7 @@ jobs:
             steps.version.outputs.version }}
 
   publish-binaries:
+    if: github.repository == 'mcp-telegram/mcp-telegram'
     # Release tags only (environment policy + tag ruleset): a branch dispatch
     # by anyone with write access cannot publish.
     environment: release

@@ -1,6 +1,13 @@
 /** MCP SDK internal tool registry — field name "handler" confirmed in SDK v1.29.0 */
 export type McpRegisteredTool = {
   handler: (args: Record<string, unknown>, extra: Record<string, unknown>) => Promise<unknown>;
+  enabled?: boolean;
+  remove?: () => void;
+  inputSchema?: {
+    safeParseAsync: (
+      args: unknown,
+    ) => Promise<{ success: true; data: Record<string, unknown> } | { success: false; error: unknown }>;
+  };
 };
 export interface McpServerInternal {
   _registeredTools: Record<string, McpRegisteredTool>;
@@ -70,12 +77,14 @@ export function parseMessages(buf: string): { messages: IpcMessage[]; remaining:
 }
 
 function isIpcMessage(m: Partial<IpcMessage>): m is IpcMessage {
-  if (!m || typeof m !== "object" || typeof m.type !== "string" || typeof m.id !== "string") return false;
-  return (
-    m.type === "tool" ||
-    m.type === "tool_response" ||
-    m.type === "login_start" ||
-    m.type === "login_qr" ||
-    m.type === "login_done"
-  );
+  if (!m || typeof m !== "object" || Array.isArray(m) || typeof m.type !== "string" || typeof m.id !== "string")
+    return false;
+  if (m.type === "tool") {
+    return (
+      typeof m.tool === "string" &&
+      m.tool.length > 0 &&
+      (m.args === undefined || (m.args !== null && typeof m.args === "object" && !Array.isArray(m.args)))
+    );
+  }
+  return m.type === "tool_response" || m.type === "login_start" || m.type === "login_qr" || m.type === "login_done";
 }

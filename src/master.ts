@@ -13,6 +13,7 @@ import {
 } from "./ipc-protocol.js";
 import { releaseLock, releaseSocket, socketPath } from "./lock.js";
 import { TelegramService } from "./telegram-client.js";
+import { readToolPolicy } from "./tool-policy.js";
 import { registerTools } from "./tools/index.js";
 
 // Ceiling for a single tool call inside the master. Must stay just under the client's
@@ -71,6 +72,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 export interface HandleClientOptions {
+  /** Authentication changes are unavailable to read-only clients. */
+  allowLogin?: boolean;
   /** Override the per-call ceiling. Exists so tests can exercise the timeout path without
    *  waiting out the 28s production budget; production callers use the default. */
   toolCallTimeoutMs?: number;
@@ -99,7 +102,16 @@ export function handleClient(
       if (msg.type === "tool") {
         await handleToolRequest(socket, msg, mcpServer, telegram, toolCallTimeoutMs);
       } else if (msg.type === "login_start") {
-        await handleLoginStart(socket, msg, telegram);
+        if (opts.allowLogin) {
+          await handleLoginStart(socket, msg, telegram);
+        } else {
+          send(socket, {
+            type: "login_done",
+            id: msg.id,
+            success: false,
+            error: "Login is disabled in read-only mode; stop the daemon and use the local login CLI",
+          });
+        }
       }
       // Responses and QR frames are master→client only — client-side messages ignored here
     }
@@ -140,10 +152,10 @@ async function handleToolRequest(
   telegram: TelegramService,
   timeoutMs: number = TOOL_CALL_TIMEOUT_MS,
 ) {
-  const tool = mcpServer._registeredTools[req.tool];
+  const tool = Object.hasOwn(mcpServer._registeredTools, req.tool) ? mcpServer._registeredTools[req.tool] : undefined;
   const response: IpcToolResponse = { type: "tool_response", id: req.id };
 
-  if (!tool) {
+  if (!tool || tool.enabled === false) {
     response.error = `Unknown tool: ${req.tool}`;
   } else {
     // telegram-logout must cancel an in-progress QR login instead of queueing behind it
@@ -153,7 +165,16 @@ async function handleToolRequest(
     }
     const unlock = await globalLock.acquire();
     try {
-      response.result = await withTimeout(tool.handler(req.args ?? {}, {}), timeoutMs, req.tool);
+      const parsed = tool.inputSchema ? await tool.inputSchema.safeParseAsync(req.args ?? {}) : undefined;
+      if (parsed && !parsed.success) {
+        // Never echo rejected arguments: they may contain secrets or login material.
+        throw new Error(`Invalid arguments for tool: ${req.tool}`);
+      }
+      response.result = await withTimeout(
+        tool.handler(parsed?.success ? parsed.data : (req.args ?? {}), {}),
+        timeoutMs,
+        req.tool,
+      );
     } catch (err) {
       response.error = err instanceof Error ? err.message : String(err);
       // A call that burns the whole budget is the signature of a dead MTProto transport that
@@ -223,7 +244,8 @@ export async function startOwner(
   const label = opts.label ?? "mcp-telegram";
 
   const server = new McpServer({ name: "mcp-telegram", version });
-  registerTools(server, telegram);
+  const policy = readToolPolicy();
+  registerTools(server, telegram, policy);
   const mcpServer = server as unknown as McpServerInternal;
 
   // Remove a stale socket file from a previous crash before attempting to listen.
@@ -233,7 +255,7 @@ export async function startOwner(
   const srv = createServer((socket) => {
     console.error(`[${label}] client connected`);
     socket.on("close", () => console.error(`[${label}] client disconnected`));
-    handleClient(socket, mcpServer, telegram);
+    handleClient(socket, mcpServer, telegram, { allowLogin: policy.mode === "full" });
   });
 
   await new Promise<void>((resolve, reject) => {

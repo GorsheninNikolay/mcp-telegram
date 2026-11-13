@@ -12,7 +12,7 @@ import type { ProxyInterface } from "telegram/network/connection/TCPMTProxy.js";
 import { computeCheck } from "telegram/Password.js";
 import { StringSession } from "telegram/sessions/index.js";
 import { Api } from "telegram/tl/index.js";
-import { getInputUser } from "telegram/Utils.js";
+import { getInputUser, getPeerId } from "telegram/Utils.js";
 import { secureSessionDir } from "./lock.js";
 import { FLOOD_WAIT_ERROR_PREFIX, RateLimiter } from "./rate-limiter.js";
 import type {
@@ -1931,10 +1931,15 @@ export class TelegramService {
 
   // ─── Chat lookup & info ────────────────────────────────────────────────────
 
-  /**
-   * Resolve a chat by ID, username, or display name.
-   * Falls back to searching user's dialogs if getEntity() fails.
-   */
+  /** Refuse ambiguous bare IDs or any other peer substitution in a scoped request. */
+  async requireExactChatId(chatId: string): Promise<void> {
+    const entity = await this.resolveChat(chatId);
+    if (getPeerId(entity) !== chatId) {
+      throw new Error("Resolved peer does not match the allowed canonical chat ID");
+    }
+  }
+
+  /** Resolve names through dialogs, but never interpret a missing numeric ID as a title. */
   async resolveChat(chatId: string): Promise<ChatEntity> {
     if (!this.client) throw new Error(NOT_CONNECTED_ERROR);
 
@@ -1961,6 +1966,7 @@ export class TelegramService {
         this.entityCache.set(chatId, byId);
         return byId;
       }
+      throw new Error(`Cannot find chat "${chatId}" by numeric ID`);
     }
 
     // Search dialogs by display name

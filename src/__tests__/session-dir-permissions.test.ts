@@ -42,8 +42,11 @@ describe("secureSessionDir", { skip: !posix && "POSIX modes only" }, () => {
     const dir = mkdtempSync(join(tmpdir(), "sessdir-"));
     try {
       chmodSync(dir, 0o2775);
+      // Some filesystems clear setgid for an unprivileged caller. Preserve the bits
+      // actually accepted by the OS rather than assuming chmod retained them.
+      const originalMode = statSync(dir).mode & 0o7777;
       secureSessionDir(dir, "/nonexistent-dedicated");
-      assert.equal(statSync(dir).mode & 0o7777, 0o2755);
+      assert.equal(statSync(dir).mode & 0o7777, originalMode & ~0o022);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

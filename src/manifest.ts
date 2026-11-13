@@ -77,7 +77,8 @@ function introspect(): ToolManifest {
 
   try {
     const server = new McpServer({ name: "manifest-introspect", version: "0.0.0" });
-    registerTools(server, {} as TelegramService);
+    // This is the offline full-capability catalog, not the active owner's policy.
+    registerTools(server, {} as TelegramService, { mode: "full" });
     return buildManifest(server);
   } finally {
     for (const key of OPT_IN_FLAGS) {

@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TelegramService } from "../telegram-client.js";
+import { applyToolPolicy, readToolPolicy, type ToolPolicy } from "../tool-policy.js";
 import { registerAccountTools } from "./account.js";
 import { registerAuthTools } from "./auth.js";
 import { registerBoostTools } from "./boosts.js";
@@ -21,7 +22,7 @@ import { registerStickerTools } from "./stickers.js";
 import { registerStoryTools } from "./stories.js";
 import { registerTranscribeTools } from "./transcribe.js";
 
-export function registerTools(server: McpServer, telegram: TelegramService) {
+export function registerTools(server: McpServer, telegram: TelegramService, policy: ToolPolicy = readToolPolicy()) {
   registerAuthTools(server, telegram);
   registerMessageTools(server, telegram);
   registerChatTools(server, telegram);
@@ -42,4 +43,10 @@ export function registerTools(server: McpServer, telegram: TelegramService) {
   registerStarsTools(server, telegram);
   registerQuickRepliesTools(server, telegram);
   registerMusicTools(server, telegram);
+  applyToolPolicy(server, policy, async (chatId) => {
+    if (!(await telegram.ensureConnected())) {
+      throw new Error("Cannot verify the allowed chat while disconnected");
+    }
+    await telegram.requireExactChatId(chatId);
+  });
 }

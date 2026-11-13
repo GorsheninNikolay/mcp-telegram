@@ -11,6 +11,7 @@ import {
 } from "./ipc-protocol.js";
 import { socketPath } from "./lock.js";
 import { TelegramService } from "./telegram-client.js";
+import { applyToolPolicy, readToolPolicy } from "./tool-policy.js";
 import { registerTools } from "./tools/index.js";
 
 const CONNECT_TIMEOUT_MS = 5_000;
@@ -242,10 +243,14 @@ export async function runClient(apiId: number, apiHash: string, version: string)
   // Register all tools for MCP schema; dummy telegram instance is never used for actual calls
   const telegram = new TelegramService(apiId, apiHash);
   const server = new McpServer({ name: "mcp-telegram", version });
-  registerTools(server, telegram);
+  const policy = readToolPolicy();
+  registerTools(server, telegram, policy);
 
   // Replace all handlers with IPC-forwarding versions
   wireIpcProxies(server, ipc);
+  // Wiring replaces handlers: retain local scope checks around the IPC proxies.
+  // Canonical peer verification remains the owner's responsibility.
+  applyToolPolicy(server, policy);
 
   // Parent closed stdio → exit so parent can spawn a fresh instance cleanly
   process.stdin.on("end", () => process.exit(0));

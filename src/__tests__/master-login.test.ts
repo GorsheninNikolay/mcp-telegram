@@ -86,7 +86,7 @@ describe("master handleLoginStart", () => {
 
     sockPath = makeIpcEndpoint("mcp-master-login");
     endpoints.push(sockPath);
-    server = createServer((socket) => handleClient(socket, mcp, telegram));
+    server = createServer((socket) => handleClient(socket, mcp, telegram, { allowLogin: true }));
     await new Promise<void>((resolve) => server.listen(sockPath, resolve));
   }
 

@@ -1,5 +1,10 @@
 # Telegram MCP Server
 
+> Персональный fork с дополнительными ограничениями безопасности. По умолчанию доступны только инструменты чтения текста;
+> отправка, скачивание файлов и управление аккаунтом отключены на стороне сервера.
+> Перед установкой прочитайте [политику и ограничения fork](FORK_SECURITY.md).
+> Инструкции upstream ниже могут описывать функции, требующие явного `MCP_TELEGRAM_MODE=full`.
+
 [![npm](https://img.shields.io/npm/v/@overpod/mcp-telegram)](https://www.npmjs.com/package/@overpod/mcp-telegram)
 [![npm downloads](https://img.shields.io/npm/dm/@overpod/mcp-telegram)](https://www.npmjs.com/package/@overpod/mcp-telegram)
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
